@@ -20,6 +20,9 @@ export function createInput(target) {
   let stoke = false;
   let actions = 0;
   let toggles = 0;
+  /** The last pointer press in field coordinates, for screens that need a
+   * position (the shop's cards); consumed by takeClick(). */
+  let click = null;
 
   window.addEventListener('keydown', (event) => {
     if (event.code === 'Space') {
@@ -54,6 +57,7 @@ export function createInput(target) {
     const fx = (event.clientX - rect.left - ox) / scale;
     const fy = (event.clientY - rect.top - oy) / scale;
     const tile = [Math.floor(fx / FIELD.tile), Math.floor(fy / FIELD.tile)];
+    click = { x: fx, y: fy };
     const node = TRACK.get(key(tile));
     if (node && node.junction >= 0) {
       toggles |= 1 << node.junction;
@@ -66,6 +70,13 @@ export function createInput(target) {
     /** True while Space is held. */
     stoke() {
       return stoke;
+    },
+    /** The last pointer press in field coordinates, or null if none since
+     * the last call. */
+    takeClick() {
+      const taken = click;
+      click = null;
+      return taken;
     },
     /** The one-shot presses since the last call, as ACTION_* flags. */
     takeActions() {

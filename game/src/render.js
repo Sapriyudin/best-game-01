@@ -3,20 +3,40 @@
 // empty yard, and the HUD lives there as a glass dashboard — score, heat, waves,
 // furnaces, switches — so no track is ever covered by chrome. Flat shapes, canvas
 // text, one amber accent on a dark blue-grey night. Numbers are tabular.
-import { FIELD, FONT, FURNACE, LIVES, PALETTE, STATIONS, SWITCH_LABELS, SWITCH_NAMES, TRACK, WIN_SCORE } from './config.js';
+import { FIELD, FONT, FURNACE, PALETTE, STATIONS, SWITCH_LABELS, SWITCH_NAMES, TRACK, UPGRADES, WIN_SCORE } from './config.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
 export const SCREEN_PAUSED = 'paused';
 export const SCREEN_OVER = 'over';
 export const SCREEN_WIN = 'win';
+export const SCREEN_SHOP = 'shop';
 
 const TILE = FIELD.tile;
 const key = (tile) => `${tile[0]},${tile[1]}`;
 const centre = (tile) => ({ x: (tile[0] + 0.5) * TILE, y: (tile[1] + 0.5) * TILE });
 
 /** The dashboard panel in the loop's eye: x, y, width, height. */
-const DASH = { x: 288, y: 196, w: 704, h: 328 };
+const DASH = { x: 288, y: 196, w: 704, h: 360 };
+
+/**
+ * The between-wave shop panel and its three cards, in field coordinates.
+ * shopCardAt() answers which card a field point falls on (-1 for none).
+ */
+const SHOP = { x: 200, y: 150, w: 880, h: 420 };
+const SHOP_CARDS = [
+  { x: SHOP.x + 24, y: SHOP.y + 148, w: 264, h: 196 },
+  { x: SHOP.x + 308, y: SHOP.y + 148, w: 264, h: 196 },
+  { x: SHOP.x + 592, y: SHOP.y + 148, w: 264, h: 196 },
+];
+
+export function shopCardAt(x, y) {
+  for (let i = 0; i < SHOP_CARDS.length; i += 1) {
+    const card = SHOP_CARDS[i];
+    if (x >= card.x && x <= card.x + card.w && y >= card.y && y <= card.y + card.h) return i;
+  }
+  return -1;
+}
 
 function cachedLabel(prefix) {
   let value = -1;
@@ -172,9 +192,10 @@ export function createRenderer(canvas) {
       const station = STATIONS[tileKey];
       const [x, y] = tileKey.split(',').map(Number);
       const c = centre([x, y]);
-      // Labels must not run off the field's edge: edge stations align inward.
+      // Labels must not run off the field's edge: edge stations align inward
+      // with a real margin, so the whole label stays inside the frame.
       const align = c.x < 70 ? 'left' : c.x > FIELD.width - 70 ? 'right' : 'center';
-      const lx = align === 'left' ? 6 : align === 'right' ? FIELD.width - 6 : c.x;
+      const lx = align === 'left' ? 18 : align === 'right' ? FIELD.width - 18 : c.x;
       if (station.kind === 'coal') {
         const pile = state.coal[tileKey];
         context.fillStyle = PALETTE.coal;
@@ -368,8 +389,19 @@ export function createRenderer(canvas) {
   function drawPopups(state) {
     for (const popup of state.popups) {
       if (!popup.active) continue;
+      // Popups rise from a station or a smash: clamp them inside the frame so
+      // an edge popup never runs off the side or sits on a station label, and
+      // give the text a dark pill so it reads over rails and kilns alike.
+      const px = Math.max(70, Math.min(FIELD.width - 70, popup.x));
+      const py = Math.max(30, Math.min(FIELD.height - 14, popup.y));
+      context.font = `bold 20px ${FONT}`;
+      const w = context.measureText(popup.text).width;
+      context.globalAlpha = Math.min(1, popup.ttl / 0.5) * 0.85;
+      context.fillStyle = 'rgba(10,13,19,0.85)';
+      rr(px - w / 2 - 10, py - 23, w + 20, 30, 15);
+      context.fill();
       context.globalAlpha = Math.min(1, popup.ttl / 0.5);
-      text(popup.text, popup.x, popup.y, 20, popup.color, 'center');
+      text(popup.text, px, py, 20, popup.color, 'center');
       context.globalAlpha = 1;
     }
   }
@@ -413,9 +445,9 @@ export function createRenderer(canvas) {
     chip(d.x + 206, stripY, 130, 56, 'BEST', bestLabel(best), PALETTE.muted);
     chip(d.x + 348, stripY, 110, 56, 'WAVE', waveLabel(state.wave), PALETTE.text);
     chip(d.x + 470, stripY, 130, 56, 'DELIVERIES', delivLabel(state.deliveries), PALETTE.good);
-    // Lives as ember dots.
+    // Lives as ember dots (up to the capacity the Spare Ember upgrades bought).
     text('EMBERS', d.x + 624, stripY + 13, 10, PALETTE.muted, 'left');
-    for (let i = 0; i < LIVES; i += 1) {
+    for (let i = 0; i < state.maxLives; i += 1) {
       const cx = d.x + 632 + i * 22;
       const cy = stripY + 38;
       context.fillStyle = i < state.lives ? PALETTE.emberMid : 'rgba(255,255,255,0.12)';
@@ -490,9 +522,82 @@ export function createRenderer(canvas) {
       text(on ? 'SPUR' : 'LOOP', x + 25, rowY + 33, 9, on ? PALETTE.accent : PALETTE.muted, 'center');
     }
 
+    // Upgrades owned: name plus level pips, so the shop's effect stays visible.
+    const upY = rowY + 52;
+    text('UPGRADES', d.x + 24, upY + 19, 11, PALETTE.muted, 'left');
+    const upgradeNames = ['COAL', 'FIREBOX', 'EMBER'];
+    const upgradeKeys = ['coal', 'insulation', 'ember'];
+    for (let i = 0; i < 3; i += 1) {
+      const x0 = d.x + 116 + i * 192;
+      const level = state.upgrades[upgradeKeys[i]];
+      const max = UPGRADES[i].maxLevel;
+      text(upgradeNames[i], x0, upY + 19, 11, level > 0 ? PALETTE.text : PALETTE.muted, 'left');
+      for (let j = 0; j < max; j += 1) {
+        context.fillStyle = j < level ? PALETTE.accent : 'rgba(255,255,255,0.14)';
+        context.beginPath();
+        context.arc(x0 + 78 + j * 15, upY + 15, 4.5, 0, Math.PI * 2);
+        context.fill();
+      }
+      text(`Lv ${level}`, x0 + 78 + max * 15 + 8, upY + 19, 11, level > 0 ? PALETTE.accent : PALETTE.muted, 'left');
+    }
+
     // Controls legend.
     text('1 / 2 / 3  switches    ·    SPACE hold to stoke (smashes bandits)    ·    CLICK a junction to flip it    ·    P pause    ·    M mute',
       d.x + d.w / 2, d.y + d.h - 16, 12, PALETTE.muted, 'center');
+  }
+
+  /**
+   * The between-wave shop: the wave's title, the score to spend, three
+   * upgrade cards (key, name, effect, level pips, cost) and the way out.
+   * Cards the player cannot afford are shown dimmed with their cost in red.
+   */
+  function drawShop(state) {
+    const s = SHOP;
+    context.fillStyle = 'rgba(10,13,19,0.94)';
+    rr(s.x, s.y, s.w, s.h, 18);
+    context.fill();
+    context.strokeStyle = 'rgba(245,165,36,0.45)';
+    context.lineWidth = 1;
+    context.stroke();
+    text(`WAVE ${state.wave} — THE NIGHT DEEPENS`, FIELD.width / 2, s.y + 52, 30, PALETTE.accent, 'center');
+    text('The line holds — for now. Spend points on ONE upgrade, or keep rolling.', FIELD.width / 2, s.y + 82, 14, PALETTE.muted, 'center');
+    text(`Points spent don't count toward dawn (${WIN_SCORE}).   Score ${state.score}`, FIELD.width / 2, s.y + 106, 14, PALETTE.text, 'center');
+    for (let i = 0; i < 3; i += 1) {
+      const track = UPGRADES[i];
+      const card = SHOP_CARDS[i];
+      const level = state.upgrades[track.id];
+      const maxed = level >= track.maxLevel;
+      const cost = maxed ? null : track.costs[level];
+      const affordable = cost !== null && state.score >= cost;
+      context.fillStyle = affordable ? 'rgba(245,165,36,0.07)' : PALETTE.panel;
+      rr(card.x, card.y, card.w, card.h, 12);
+      context.fill();
+      context.strokeStyle = affordable ? 'rgba(245,165,36,0.55)' : PALETTE.panelBorder;
+      context.lineWidth = 1;
+      context.stroke();
+      // Key number in a circle.
+      context.fillStyle = affordable ? PALETTE.accent : PALETTE.muted;
+      context.beginPath();
+      context.arc(card.x + card.w / 2, card.y + 34, 15, 0, Math.PI * 2);
+      context.fill();
+      text(String(i + 1), card.x + card.w / 2, card.y + 39, 15, '#0a0d13', 'center');
+      text(track.name, card.x + card.w / 2, card.y + 78, 17, PALETTE.text, 'center');
+      text(track.desc, card.x + card.w / 2, card.y + 102, 12, PALETTE.muted, 'center');
+      // Level pips: filled for levels owned, hollow for the next one.
+      for (let j = 0; j < track.maxLevel; j += 1) {
+        context.fillStyle = j < level ? PALETTE.accent : 'rgba(255,255,255,0.16)';
+        context.beginPath();
+        context.arc(card.x + card.w / 2 + (j - (track.maxLevel - 1) / 2) * 18, card.y + 126, 5, 0, Math.PI * 2);
+        context.fill();
+      }
+      if (maxed) {
+        text('MAXED OUT', card.x + card.w / 2, card.y + 164, 15, PALETTE.muted, 'center');
+      } else {
+        text(`${cost} PTS`, card.x + card.w / 2, card.y + 164, 18, affordable ? PALETTE.accent : PALETTE.bad, 'center');
+        if (!affordable) text("CAN'T AFFORD", card.x + card.w / 2, card.y + 186, 11, PALETTE.bad, 'center');
+      }
+    }
+    text('1 / 2 / 3 buy  ·  SPACE keep rolling', FIELD.width / 2, s.y + s.h - 22, 13, PALETTE.muted, 'center');
   }
 
   function drawPanel(title, lines, prompt, accent) {
@@ -521,7 +626,14 @@ export function createRenderer(canvas) {
     'Flip the switches (1 / 2 / 3 or click a junction) to route the train.',
     'Coal restores heat · Lit furnaces pay points · Bandits halt the train.',
     'Stoke with SPACE to smash bandits — but stoking burns the ember faster.',
+    'Between waves, spend points on upgrades — coal wagons, insulation, spare embers.',
   ];
+
+  /** One line for the end screens: what the shop bought on this run. */
+  function upgradesLine(state) {
+    const u = state.upgrades;
+    return `Upgrades: Coal Lv${u.coal} · Firebox Lv${u.insulation} · Ember Lv${u.ember}`;
+  }
 
   /** Paint one frame: field, dashboard, then a panel for the screen the game is on. */
   function draw(state, screen, best, time) {
@@ -539,7 +651,10 @@ export function createRenderer(canvas) {
     drawPopups(state);
     if (screen === SCREEN_TITLE) {
       drawPanel('EMBERLINE', TITLE_LINES, 'Press Space or click to start', PALETTE.accent);
-      text(`BEST ${best}`, FIELD.width / 2, (FIELD.height - (150 + TITLE_LINES.length * 32 + 64)) / 2 - 18, 15, PALETTE.muted, 'center');
+      // Best sits below the panel, not above it: with five title lines the
+      // panel grew tall enough that the old spot collided with the switch chip.
+      const panelHeight = 150 + TITLE_LINES.length * 32 + 64;
+      text(`BEST ${best}`, FIELD.width / 2, (FIELD.height + panelHeight) / 2 + 30, 15, PALETTE.muted, 'center');
       return;
     }
     // End screens show the panel alone: dim the field and the dashboard behind it
@@ -548,10 +663,17 @@ export function createRenderer(canvas) {
       context.fillStyle = 'rgba(5,7,10,0.62)';
       context.fillRect(0, 0, FIELD.width, FIELD.height);
       if (screen === SCREEN_OVER) {
-        drawPanel('THE EMBER DIED', [`Score ${state.score}`, `Best ${best}`, `${state.deliveries} deliveries · Wave ${state.wave}`], 'Press Space or click to try again', PALETTE.bad);
+        drawPanel('THE EMBER DIED', [`Score ${state.score}`, `Best ${best}`, `${state.deliveries} deliveries · Wave ${state.wave}`, upgradesLine(state)], 'Press Space or click to try again', PALETTE.bad);
       } else {
-        drawPanel('DAWN BREAKS', [`The line holds. Score ${state.score}`, `Best ${best}`, `${state.deliveries} deliveries · Wave ${state.wave}`], 'Press Space or click to play again', PALETTE.good);
+        drawPanel('DAWN BREAKS', [`The line holds. Score ${state.score}`, `Best ${best}`, `${state.deliveries} deliveries · Wave ${state.wave}`, upgradesLine(state)], 'Press Space or click to play again', PALETTE.good);
       }
+      return;
+    }
+    // The shop pauses the run: dim the field and show the wave's offer.
+    if (screen === SCREEN_SHOP) {
+      context.fillStyle = 'rgba(5,7,10,0.62)';
+      context.fillRect(0, 0, FIELD.width, FIELD.height);
+      drawShop(state);
       return;
     }
     drawDashboard(state, best, t);

@@ -4,7 +4,7 @@
 // caller can react without the world knowing about screens or sound. Nothing here
 // allocates after createWorld returns (the history ring reuses its slots).
 import {
-  BANDIT, BANDIT_TILES, EMBER, FIELD, FURNACE, LIVES, STATIONS, TRACK, TRAIN, WAVE, WIN_SCORE,
+  BANDIT, BANDIT_TILES, EMBER, FIELD, FURNACE, LIVES, STATIONS, TRACK, TRAIN, UPGRADE_EFFECT, UPGRADES, WAVE, WIN_SCORE,
 } from './config.js';
 
 export const EVENT_HIT = 1;
@@ -51,6 +51,11 @@ export function createWorld(random) {
     bandits: [],
     popups: [],
     history: [],
+    /** Between-wave shop: levels bought, embers the train can still lose, and
+     * whether the shop is open (the loop freezes while it is). */
+    upgrades: { coal: 0, insulation: 0, ember: 0 },
+    maxLives: LIVES,
+    shopOpen: false,
   };
   for (let i = 0; i < BANDIT.maxCap; i += 1) state.bandits.push({ active: false, tile: [0, 0] });
   for (const popup of []) state.popups.push(popup);
@@ -69,6 +74,9 @@ export function createWorld(random) {
     state.heat = EMBER.start;
     state.score = 0;
     state.lives = LIVES;
+    state.maxLives = LIVES;
+    state.upgrades = { coal: 0, insulation: 0, ember: 0 };
+    state.shopOpen = false;
     state.combo = 0;
     state.deliveries = 0;
     state.wave = 1;
@@ -124,6 +132,63 @@ export function createWorld(random) {
     bandit.tile = candidates[Math.floor(random() * candidates.length)];
   }
 
+  /** Heat lost per second, after the insulation upgrades. */
+  function heatDecay() {
+    return Math.max(1.8, EMBER.decay - UPGRADE_EFFECT.decayPerLevel * state.upgrades.insulation);
+  }
+
+  /** Heat a coal pile restores, after the coal-wagon upgrades. */
+  function coalHeat() {
+    return EMBER.coalHeat + UPGRADE_EFFECT.coalHeatPerLevel * state.upgrades.coal;
+  }
+
+  /**
+   * The shop's current offers: each track with its level, the cost of the
+   * next level (null when maxed), and whether the player can afford it.
+   */
+  function shopOffers() {
+    return UPGRADES.map((track) => {
+      const level = state.upgrades[track.id];
+      const cost = level >= track.maxLevel ? null : track.costs[level];
+      return {
+        id: track.id,
+        name: track.name,
+        desc: track.desc,
+        level,
+        maxLevel: track.maxLevel,
+        cost,
+        affordable: cost !== null && state.score >= cost,
+      };
+    });
+  }
+
+  /**
+   * Buy one upgrade: deduct its cost from the score (points spent do not
+   * count toward the win) and apply it. Returns true when the purchase
+   * happened; a failed purchase changes nothing. Buying closes the shop.
+   */
+  function buyUpgrade(id) {
+    const track = UPGRADES.find((t) => t.id === id);
+    if (!track) return false;
+    const level = state.upgrades[id];
+    if (level >= track.maxLevel) return false;
+    const cost = track.costs[level];
+    if (state.score < cost) return false;
+    state.score -= cost;
+    state.upgrades[id] = level + 1;
+    if (id === 'ember') {
+      state.maxLives += 1;
+      state.lives = Math.min(state.maxLives, state.lives + 1);
+    }
+    state.shopOpen = false;
+    return true;
+  }
+
+  /** Leave the shop without buying. */
+  function closeShop() {
+    state.shopOpen = false;
+  }
+
   function trainSpeed() {
     const base = Math.min(TRAIN.maxSpeed, TRAIN.speed + TRAIN.speedPerWave * (state.wave - 1));
     return base * (state.stoked ? TRAIN.stokeSpeed : 1);
@@ -144,8 +209,9 @@ export function createWorld(random) {
       if (pile.available) {
         pile.available = false;
         pile.timer = EMBER.coalRespawn;
-        state.heat = Math.min(EMBER.max, state.heat + EMBER.coalHeat);
-        popup(centre.x, centre.y - 30, `+${EMBER.coalHeat} HEAT`, '#ffd166');
+        const heat = coalHeat();
+        state.heat = Math.min(EMBER.max, state.heat + heat);
+        popup(centre.x, centre.y - 30, `+${heat} HEAT`, '#ffd166');
         return EVENT_COAL;
       }
     }
@@ -202,6 +268,10 @@ export function createWorld(random) {
     if (wave !== state.wave) {
       state.wave = wave;
       state.waveBanner = 2;
+      // The wave advance pauses the run for the between-wave shop: the caller
+      // opens the shop on EVENT_WAVE and the world stays frozen until it
+      // closes (buyUpgrade or closeShop), so no heat burns while choosing.
+      state.shopOpen = true;
       events |= EVENT_WAVE;
     }
     if (state.waveBanner > 0) state.waveBanner -= dt;
@@ -209,7 +279,7 @@ export function createWorld(random) {
 
     // Heat always burns while the train rolls; a halted train burns too.
     if (!harmless) {
-      state.heat -= (EMBER.decay + (state.stoked ? EMBER.stokeDecay : 0)) * dt;
+      state.heat -= (heatDecay() + (state.stoked ? EMBER.stokeDecay : 0)) * dt;
       if (state.heat <= 0 && state.train.grace <= 0) {
         state.heat = 0;
         state.lives -= 1;
@@ -299,5 +369,5 @@ export function createWorld(random) {
   }
 
   reset();
-  return { state, reset, step, placeBanditAt, setSwitch, trainPosition };
+  return { state, reset, step, placeBanditAt, setSwitch, trainPosition, buyUpgrade, closeShop, shopOffers };
 }

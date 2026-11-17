@@ -65,6 +65,39 @@ export const BANDIT = {
 /** Deliveries per wave: wave = 1 + floor(deliveries / 4). */
 export const WAVE = { deliveriesPerWave: 4 };
 
+/**
+ * Between-wave shop: when a wave advances the game pauses and offers one
+ * purchase. Points spent do not count toward the 2000 win — that is the
+ * trade-off: an upgrade makes the rest of the run easier, but the win needs
+ * the same 2000 points earned after paying for it. Each track has levels;
+ * the cost listed is for the next level (level 0 buys level 1).
+ */
+export const UPGRADES = [
+  {
+    id: 'coal',
+    name: 'Coal Wagon',
+    desc: 'Coal piles restore +10 heat',
+    maxLevel: 3,
+    costs: [250, 400, 550],
+  },
+  {
+    id: 'insulation',
+    name: 'Insulated Firebox',
+    desc: 'Ember burns 0.4 heat/s slower',
+    maxLevel: 3,
+    costs: [300, 450, 600],
+  },
+  {
+    id: 'ember',
+    name: 'Spare Ember',
+    desc: '+1 ember capacity, and +1 ember now',
+    maxLevel: 2,
+    costs: [400, 600],
+  },
+];
+/** Heat regained per coal level, and heat decay saved per insulation level. */
+export const UPGRADE_EFFECT = { coalHeatPerLevel: 10, decayPerLevel: 0.4 };
+
 export const LIVES = 3;
 
 /** The track: a closed loop plus three switchable spurs. Tiles are [col, row]. */

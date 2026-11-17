@@ -1,18 +1,18 @@
 // Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s
 // steps (several in a slow frame, none in a fast one), and the renderer paints what is
-// there. The game moves between five screens: title, play, paused, game over and win.
+// there. The game moves between six screens: title, play, shop, paused, game over and win.
 //
 // ?seed=N fixes the train's luck. ?shot=start|play|wave|end (with &seed=N) stages that
 // scene instead of running the loop, paints it twice and sets window.__shotReady for
 // a screenshot.
-import { BEST_KEY, STEP } from './config.js';
+import { BEST_KEY, STEP, UPGRADES } from './config.js';
 import { createRandom } from './random.js';
 import {
   createWorld, EVENT_COAL, EVENT_COIN, EVENT_HIT, EVENT_OVER, EVENT_SMASH, EVENT_WAVE, EVENT_WIN,
 } from './world.js';
 import { ACTION_CONFIRM, ACTION_MUTE, ACTION_PAUSE, createInput } from './input.js';
 import {
-  createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN,
+  createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_SHOP, SCREEN_TITLE, SCREEN_WIN, shopCardAt,
 } from './render.js';
 import { createAudio } from './audio.js';
 import { stageShot } from './shots.js';
@@ -107,6 +107,50 @@ function runGame() {
       audio.setMuted(!audio.isMuted());
       announce(audio.isMuted() ? 'Muted.' : 'Sound on.');
     }
+    if (screen === SCREEN_SHOP) {
+      // The shop: 1/2/3 or a card click buys that upgrade (a failed purchase
+      // stays in the shop so the player can pick another), Space/Enter or a
+      // click outside the cards keeps rolling without buying.
+      const toggles = input.takeToggles();
+      if (toggles) {
+        for (let i = 0; i < 3; i += 1) {
+          if (toggles & (1 << i)) {
+            if (world.buyUpgrade(UPGRADES[i].id)) {
+              audio.chime();
+              screen = SCREEN_PLAY;
+              announce(`Bought ${UPGRADES[i].name}. Keep the ember alive.`);
+            } else {
+              audio.thud();
+              announce(`${UPGRADES[i].name} is not available — check the cost.`);
+            }
+            break;
+          }
+        }
+      } else if (actions & ACTION_CONFIRM) {
+        world.closeShop();
+        screen = SCREEN_PLAY;
+        announce('Playing.');
+      } else {
+        const click = input.takeClick();
+        if (click) {
+          const card = shopCardAt(click.x, click.y);
+          if (card >= 0) {
+            if (world.buyUpgrade(UPGRADES[card].id)) {
+              audio.chime();
+              screen = SCREEN_PLAY;
+              announce(`Bought ${UPGRADES[card].name}. Keep the ember alive.`);
+            } else {
+              audio.thud();
+            }
+          } else {
+            world.closeShop();
+            screen = SCREEN_PLAY;
+            announce('Playing.');
+          }
+        }
+      }
+      return;
+    }
     if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER || screen === SCREEN_WIN)) {
       startGame();
     } else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
@@ -125,16 +169,36 @@ function runGame() {
     }
     const frameInput = { stoke: input.stoke(), toggles: input.takeToggles() };
     if (frameInput.toggles) audio.click();
+    // A bandit ambush and a burnt-out ember both raise EVENT_HIT, but only
+    // the burnt-out one costs a life: compare lives to say which it was.
+    const livesBefore = world.state.lives;
     const events = world.step(STEP, frameInput, false);
     if (events & EVENT_COIN) audio.chime();
     else if (events & EVENT_COAL) audio.thunk();
     else if (events & EVENT_SMASH) audio.smash();
     else if (events & EVENT_HIT) audio.thud();
-    if (events & EVENT_WAVE) audio.wave();
+    if (events & EVENT_WAVE) {
+      audio.wave();
+      // The wave advance opens the shop and freezes the run until the player
+      // buys or keeps rolling (a win or loss on the same frame takes priority).
+      // Drain any pending presses first, so a switch flip made as the wave
+      // turned does not leak into the shop as an accidental purchase.
+      if (!(events & (EVENT_WIN | EVENT_OVER))) {
+        input.takeActions();
+        input.takeToggles();
+        input.takeClick();
+        screen = SCREEN_SHOP;
+        announce(`Wave ${world.state.wave}. The night deepens — spend points on an upgrade, or press Space to keep rolling.`);
+      }
+    }
     if (events & EVENT_WIN) endGame(true);
     else if (events & EVENT_OVER) endGame(false);
     else if (events & EVENT_HIT) {
-      announce(world.state.lives === 1 ? 'The ember died. 1 ember left.' : `The ember died. ${world.state.lives} embers left.`);
+      if (world.state.lives < livesBefore) {
+        announce(world.state.lives === 1 ? 'The ember died. 1 ember left.' : `The ember died. ${world.state.lives} embers left.`);
+      } else {
+        announce('Ambushed! A bandit halted the train.');
+      }
     }
   }
 
